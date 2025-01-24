@@ -107,6 +107,7 @@ class Form(QtWidgets.QDialog):
         if(path.endswith('.csv')):
             df = pandas.read_csv(path,engine='python',header=0,iterator=True,chunksize=15000)
             data = pandas.DataFrame(pandas.concat(df,ignore_index=True))
+        data = data.dropna(axis='index',how='all')
         return data
 
     def run(self, file, sheet, kt, ctlBool, ctlFile, ctlSheet, corrThresh, outputTitle):
@@ -135,8 +136,10 @@ class Form(QtWidgets.QDialog):
             dynadata.append(newdata.iloc[index,2:])
         #The Big Loop
         dynaTitles = []
-        pages = []
+        resultColumns = []
         networkComplex = []
+        positiveEdges = []
+        negativeEdges = []
         for i in range(k-kt+1):
             dynaMatrixSubsets = []
             good = []
@@ -179,16 +182,25 @@ class Form(QtWidgets.QDialog):
                 if ee > 1:
                     numberEdge = sum(sum(adjMatrix))/2
                     networkComplex.append(numberEdge * 2 / (ee*(ee-1))*ee)
+                    goodCol = pandas.Series(data=sum(adjMatrix),index=label2,name=days[i])
+                    resultColumns.append(goodCol)
                 else:
                     networkComplex.append(0)
                 dynaMatrix = dynaMatrix[numpy.ix_(good,good)]
                 coordsArray2 = numpy.argwhere(dynaMatrix <= (-1*corrThresh)) #change function to numpy.nonzero ?
                 edgeColor = []
-                for k2 in range(len(coordsArray2)):
-                    edgeColor.append([label2(coordsArray2[k2][0]),label2(coordsArray2[k2][1])])#see below for negative connection handling
+                if len(coordsArray2) > 0:
+                    for k2 in range(len(coordsArray2)):
+                        edgeColor.append([label2(coordsArray2[k2][0]),label2(coordsArray2[k2][1])])#see below for negative connection handling
+                    negativeEdges.append(len(coordsArray2))
+                    positiveEdges.append(sum(sum(adjMatrix))/2-len(coordsArray2))
+                else:
+                    negativeEdges.append(0)
+                    positiveEdges.append(sum(sum(adjMatrix))/2)
                 G = nx.from_numpy_array(adjMatrix,parallel_edges=False)
                 pos = nx.circular_layout(G)
-                node_opts = {"node_size": 500, "node_color": "lemonchiffon", "edgecolors": "k", "linewidths": 1.0}
+                node_colors = ["red" if len(G.edges(n)) > 0 else "lemonchiffon" for n in G.nodes()]
+                node_opts = {"node_size": 500, "node_color": node_colors, "edgecolors": "k", "linewidths": 1.0}
                 nx.draw_networkx_nodes(G, pos, **node_opts)
                 nx.draw_networkx_labels(G, pos, labelDict, font_size=6)
                 nx.draw_networkx_edges(G,pos,width=2)
@@ -196,12 +208,26 @@ class Form(QtWidgets.QDialog):
                     nx.draw_networkx_edges(G, pos, edgelist=edgeColor, edge_color="r", width=2)
                 plt.suptitle(dynaTitle)
                 plt.savefig(outputTitle+' '+dynaTitle+'.tiff')
-                print()
-                #write node info into file
-                #append file to pages
+                plt.close()
             else:
                 networkComplex.append(0)
-
+        posNegConnections = pandas.DataFrame(data=[positiveEdges,negativeEdges],columns=dynaTitles,
+                                             index=['Positive','Negative']).T
+        fig, ax = plt.subplots()
+        plt.plot(dynaTitles,networkComplex,'o-k')
+        ax.xaxis.set_tick_params(rotation=45)
+        plt.suptitle(outputTitle + ' Network Complexity')
+        fig.set_layout_engine('tight')
+        plt.savefig(outputTitle + ' Network Complexity.tiff')
+        plt.close()
+        results = pandas.concat(resultColumns, axis=1, ignore_index=False, join='outer')
+        writer = pandas.ExcelWriter(outputTitle+' DyNA.xlsx',engine='xlsxwriter')
+        results.to_excel(writer,'# Connections',engine='xlsxwriter',index=True)
+        posNegConnections.to_excel(writer,'Pos v Neg Connections',engine='xlsxwriter',index=True)
+        writer.close()
+        successMessage = QtWidgets.QMessageBox.information(self, 'Success!',
+                                              'Your DyNA has finished successfully!')
+        return 0
 
 
 form = Form()
